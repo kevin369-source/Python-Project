@@ -1,0 +1,302 @@
+import pygame
+import random
+import math
+import array
+
+# --- Configuration ---
+WIDTH, HEIGHT_GAME = 800, 600
+UI_HEIGHT = 60  # Dedicated space at the top for Score and Timer
+HEIGHT = HEIGHT_GAME + UI_HEIGHT  # Total screen height
+GRID_SIZE = 20
+FPS_START = 10
+BORDER_THICKNESS = 20
+
+# Colors
+COLOR_BG = (20, 20, 20)
+COLOR_UI_BG = (10, 10, 10)  # Darker background for the top header bar
+COLOR_BORDER = (50, 50, 50)
+COLOR_SNAKE = (50, 255, 50)
+COLOR_SNAKE_HEAD = (100, 255, 100)
+COLOR_FOOD = (255, 50, 50)
+COLOR_TEXT = (255, 255, 255)
+COLOR_SEL = (255, 255, 100)
+COLOR_GRASS_1 = (25, 35, 25)
+COLOR_GRASS_2 = (30, 40, 30)
+COLOR_FLASH = (255, 255, 0)  # Pure clean yellow for the eating effect
+
+
+class PythonGame:
+    def __init__(self):
+        pygame.init()
+        pygame.mixer.init(frequency=22050, size=-16,
+                          channels=1)  # Init audio mixer
+        self.screen = pygame.display.set_mode((WIDTH, HEIGHT))
+        pygame.display.set_caption("Python Game - OnlyProject")
+        self.clock = pygame.time.Clock()
+        self.font_main = pygame.font.SysFont("bahnschrift", 40)
+        self.font_small = pygame.font.SysFont("bahnschrift", 25)
+
+        self.state = 'MENU'
+        self.menu_selection = 0
+        self.start_time = 0
+        self.final_time_display = "00:00"
+
+        # Our synthetic death sounds
+        self.death_sound = self.death_sound()
+
+        self.reset_game_logic()
+
+    def death_sound(self):
+        sample_rate = 22050
+        duration_scream = 0.8
+        duration_cry = 1.2
+        total_samples = int(sample_rate * (duration_scream + duration_cry))
+
+        buf = array.array('h', [0] * total_samples)
+
+        # 1. "AHHHHH" Scream Part (Harsh, high-pitched square/noise blend)
+        for i in range(int(sample_rate * duration_scream)):
+            t = i / sample_rate
+            freq = 600 - (t * 200)
+            scream_wave = math.sin(
+                2 * math.pi * freq * t + math.sin(2 * math.pi * 30 * t) * 2)
+            square_wave = 1.0 if scream_wave > 0 else -1.0
+            envelope = 1.0 - (t / duration_scream) * 0.3
+            value = int(square_wave * 8000 * envelope)
+            buf[i] = value
+
+        # 2. "CRYING" Part (Slower, rhythmic whimpering/sobbing)
+        start_cry_idx = int(sample_rate * duration_scream)
+        for i in range(int(sample_rate * duration_cry)):
+            idx = start_cry_idx + i
+            t = i / sample_rate
+            sob_pulse = abs(math.sin(2 * math.pi * 4 * t))
+            freq = 250 + (sob_pulse * 80)
+            cry_wave = math.sin(2 * math.pi * freq * t)
+            fade_out = 1.0 - (t / duration_cry)
+            value = int(cry_wave * 6000 * sob_pulse * fade_out)
+            buf[idx] = value
+
+        return pygame.mixer.Sound(buffer=buf)
+
+    def reset_game_logic(self):
+        self.snake_pos = [[400, 300 + UI_HEIGHT],
+                          [380, 300 + UI_HEIGHT], [360, 300 + UI_HEIGHT]]
+        self.direction = 'RIGHT'
+        self.change_to = self.direction
+        self.score = 0
+        self.speed = FPS_START
+        self.food_pos = self.spawn_food()
+        self.flash_timer = 0  # Tracks remaining animation frames for the eat effect
+
+    def spawn_food(self):
+        padding = 2
+        min_g, max_gx = padding, (WIDTH // GRID_SIZE) - 1 - padding
+        min_gy = (UI_HEIGHT // GRID_SIZE) + padding
+        max_gy = (HEIGHT // GRID_SIZE) - 1 - padding
+
+        x = random.randint(min_g, max_gx) * GRID_SIZE
+        y = random.randint(min_gy, max_gy) * GRID_SIZE
+        if [x, y] in self.snake_pos:
+            return self.spawn_food()
+        return [x, y]
+
+    def handle_input(self):
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                return False
+
+            if event.type == pygame.KEYDOWN:
+                if self.state == 'MENU' or self.state == 'GAMEOVER':
+                    if event.key == pygame.K_w:
+                        self.menu_selection = 0
+                    elif event.key == pygame.K_s:
+                        self.menu_selection = 1
+                    elif event.key == pygame.K_RETURN:
+                        if self.menu_selection == 0:
+                            self.reset_game_logic()
+                            self.state = 'PLAYING'
+                            self.start_time = pygame.time.get_ticks()
+                        else:
+                            return False
+
+                elif self.state == 'PLAYING':
+                    if event.key == pygame.K_w and self.direction != 'DOWN':
+                        self.change_to = 'UP'
+                    elif event.key == pygame.K_s and self.direction != 'UP':
+                        self.change_to = 'DOWN'
+                    elif event.key == pygame.K_a and self.direction != 'RIGHT':
+                        self.change_to = 'LEFT'
+                    elif event.key == pygame.K_d and self.direction != 'LEFT':
+                        self.change_to = 'RIGHT'
+        return True
+
+    def update(self):
+        if self.state != 'PLAYING':
+            return
+
+        # Countdown the yellow flash animation timer if it's running
+        if self.flash_timer > 0:
+            self.flash_timer -= 1
+
+        self.direction = self.change_to
+        head_x, head_y = self.snake_pos[0]
+
+        if self.direction == 'UP':
+            head_y -= GRID_SIZE
+        if self.direction == 'DOWN':
+            head_y += GRID_SIZE
+        if self.direction == 'LEFT':
+            head_x -= GRID_SIZE
+        if self.direction == 'RIGHT':
+            head_x += GRID_SIZE
+
+        new_head = [head_x, head_y]
+
+        if (head_x < BORDER_THICKNESS or head_x >= WIDTH - BORDER_THICKNESS or
+            head_y < BORDER_THICKNESS + UI_HEIGHT or head_y >= HEIGHT - BORDER_THICKNESS or
+                new_head in self.snake_pos):
+
+            self.death_sound.play()
+            self.final_time_display = self.get_formatted_time()
+            self.state = 'GAMEOVER'
+            self.menu_selection = 0
+            return
+
+        self.snake_pos.insert(0, new_head)
+
+        if head_x == self.food_pos[0] and head_y == self.food_pos[1]:
+            self.score += 5
+            self.food_pos = self.spawn_food()
+            self.flash_timer = 3  # Triggers a crisp yellow flash lasting 3 frames
+            if self.score % 50 == 0:
+                self.speed += 1
+        else:
+            self.snake_pos.pop()
+
+    def get_formatted_time(self):
+        seconds = (pygame.time.get_ticks() - self.start_time) // 1000
+        mins = seconds // 60
+        secs = seconds % 60
+        return f"{mins:02}:{secs:02}"
+
+    def draw_text(self, text, font, color, y_offset):
+        surf = font.render(text, True, color)
+        rect = surf.get_rect(
+            center=(WIDTH//2, (HEIGHT_GAME//2 + UI_HEIGHT) + y_offset))
+        self.screen.blit(surf, rect)
+
+    def draw_grass(self):
+        for row in range(BORDER_THICKNESS + UI_HEIGHT, HEIGHT - BORDER_THICKNESS, GRID_SIZE):
+            for col in range(BORDER_THICKNESS, WIDTH - BORDER_THICKNESS, GRID_SIZE):
+                if ((row // GRID_SIZE) + (col // GRID_SIZE)) % 2 == 0:
+                    color = COLOR_GRASS_1
+                else:
+                    color = COLOR_GRASS_2
+                pygame.draw.rect(self.screen, color,
+                                 (col, row, GRID_SIZE, GRID_SIZE))
+
+    def draw_designed_apple(self, pos):
+        center = (pos[0] + GRID_SIZE // 2, pos[1] + GRID_SIZE // 2)
+        pygame.draw.circle(self.screen, COLOR_FOOD,
+                           center, (GRID_SIZE // 2) - 2)
+        pygame.draw.rect(self.screen, (139, 69, 19),
+                         (pos[0] + 8, pos[1] + 2, 4, 5))
+        pygame.draw.circle(self.screen, (255, 200, 200),
+                           (pos[0] + 7, pos[1] + 7), 3)
+
+    def draw_designed_snake(self):
+        for i, pos in enumerate(self.snake_pos):
+            # Clean flash effect: override standard snake colors with bright yellow if flash_timer is active
+            if self.flash_timer > 0:
+                main_color = COLOR_FLASH
+                # Lighter center core for high contrast glow
+                inner_color = (255, 255, 150)
+            else:
+                main_color = COLOR_SNAKE_HEAD if i == 0 else COLOR_SNAKE
+                inner_color = (main_color[0]+30, 255, main_color[2]+30)
+
+            rect = (pos[0], pos[1], GRID_SIZE - 1, GRID_SIZE - 1)
+            pygame.draw.rect(self.screen, main_color, rect, border_radius=5)
+
+            inner_rect = (pos[0] + 4, pos[1] + 4, GRID_SIZE - 9, GRID_SIZE - 9)
+            pygame.draw.rect(self.screen, inner_color,
+                             inner_rect, border_radius=2)
+
+            if i == 0:
+                eye_color = (0, 0, 0)
+                if self.direction in ['UP', 'DOWN']:
+                    pygame.draw.circle(self.screen, eye_color,
+                                       (pos[0] + 6, pos[1] + 10), 3)
+                    pygame.draw.circle(self.screen, eye_color,
+                                       (pos[0] + 14, pos[1] + 10), 3)
+                else:
+                    pygame.draw.circle(self.screen, eye_color,
+                                       (pos[0] + 10, pos[1] + 6), 3)
+                    pygame.draw.circle(self.screen, eye_color,
+                                       (pos[0] + 10, pos[1] + 14), 3)
+
+    def draw(self):
+        self.screen.fill(COLOR_BG)
+        self.draw_grass()
+
+        pygame.draw.rect(self.screen, COLOR_BORDER,
+                         (0, UI_HEIGHT, WIDTH, HEIGHT_GAME), BORDER_THICKNESS)
+
+        pygame.draw.rect(self.screen, COLOR_UI_BG, (0, 0, WIDTH, UI_HEIGHT))
+        pygame.draw.line(self.screen, COLOR_BORDER,
+                         (0, UI_HEIGHT), (WIDTH, UI_HEIGHT), 2)
+
+        display_time = self.get_formatted_time(
+        ) if self.state == 'PLAYING' else self.final_time_display
+        score_txt = self.font_small.render(
+            f"Score: {self.score}", True, COLOR_TEXT)
+        time_txt = self.font_small.render(
+            f"Time: {display_time}", True, COLOR_TEXT)
+        self.screen.blit(score_txt, (30, UI_HEIGHT // 2 - 12))
+        self.screen.blit(time_txt, (WIDTH - 150, UI_HEIGHT // 2 - 12))
+
+        if self.state == 'MENU':
+            self.draw_text("PYTHON GAME", self.font_main, COLOR_SNAKE, -100)
+            c1 = COLOR_SEL if self.menu_selection == 0 else COLOR_TEXT
+            c2 = COLOR_SEL if self.menu_selection == 1 else COLOR_TEXT
+            self.draw_text("> START GAME <" if self.menu_selection ==
+                           0 else "START GAME", self.font_small, c1, 20)
+            self.draw_text("> QUIT <" if self.menu_selection ==
+                           1 else "QUIT", self.font_small, c2, 60)
+
+        elif self.state == 'PLAYING' or self.state == 'GAMEOVER':
+            self.draw_designed_apple(self.food_pos)
+            self.draw_designed_snake()
+
+            if self.state == 'GAMEOVER':
+                overlay = pygame.Surface((WIDTH, HEIGHT_GAME), pygame.SRCALPHA)
+                overlay.fill((0, 0, 0, 200))
+                self.screen.blit(overlay, (0, UI_HEIGHT))
+
+                self.draw_text("GAME OVER", self.font_main, COLOR_FOOD, -110)
+                self.draw_text(
+                    f"Final Score: {self.score}", self.font_small, COLOR_TEXT, -50)
+                self.draw_text(
+                    f"Survival Time: {self.final_time_display}", self.font_small, COLOR_TEXT, -10)
+
+                c1 = COLOR_SEL if self.menu_selection == 0 else COLOR_TEXT
+                c2 = COLOR_SEL if self.menu_selection == 1 else COLOR_TEXT
+                self.draw_text("RESTART", self.font_small, c1, 60)
+                self.draw_text("QUIT", self.font_small, c2, 100)
+
+        pygame.display.flip()
+
+    def run(self):
+        while True:
+            if not self.handle_input():
+                break
+            self.update()
+            self.draw()
+            self.clock.tick(self.speed if self.state == 'PLAYING' else 30)
+        pygame.quit()
+
+
+if __name__ == "__main__":
+    game = PythonGame()
+    game.run()
